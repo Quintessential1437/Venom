@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Venom Goo AR</title>
+<style>
+:root{--bg:#08080d;--fg:#e9ebff;--accent:#b9a8ff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#08080d;--fg:#e9ebff}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#ui{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;background:rgba(6,6,12,.86)}
+#ui h1{margin:0;font-size:26px}
+#ui p{margin:0;max-width:320px;opacity:.85;font-size:15px;line-height:1.4}
+button{background:var(--accent);color:#0a0818;border:0;border-radius:999px;padding:14px 26px;font-size:16px;font-weight:700}
+button.ghost{background:transparent;color:var(--fg);border:1px solid #ffffff44}
+#hud{position:absolute;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom,0px));text-align:center;font-size:13px;opacity:.85;pointer-events:none;text-shadow:0 1px 4px #000}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="ui">
+  <h1>🖤 Venom Goo</h1>
+  <p>A black symbiote-style goo stretches between your fingers, with writhing tendrils, webbing and glossy drips. Hold both hands up to the camera.</p>
+  <button id="go">Start camera</button>
+  <button id="demo" class="ghost">No camera: drag with touch</button>
+</div>
+<video id="v" playsinline muted style="display:none"></video>
+
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),vid=document.getElementById('v');
+const ui=document.getElementById('ui'),hud=document.getElementById('hud');
+let W=0,H=0,dpr=Math.min(devicePixelRatio||1,2);
+function resize(){W=innerWidth;H=innerHeight;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+
+const N=30;
+let pts=[],anchors=[null,null];
+const ropes=[];
+for(let f=0;f<10;f++){const p=[];for(let i=0;i<N;i++)p.push({x:W/2,y:H/2+f*10,px:W/2,py:H/2+f*10});ropes.push({pts:p,t:[null,null],s:[null,null],a:[null,null]})}
+pts=ropes[0].pts;anchors=ropes[0].a;ropes.forEach(rerollRope);
+
+let mode='none',t0=performance.now();
+const smooth=[null,null];
+
+function step(dt){
+  const L=window.curL||Math.min(W,H)*0.75;
+  const seg=L/(N-1);
+  const g=1800;
+  for(let i=0;i<N;i++){
+    const p=pts[i];
+    const vx=(p.x-p.px)*0.985,vy=(p.y-p.py)*0.985;
+    p.px=p.x;p.py=p.y;
+    p.x+=vx;p.y+=vy+g*dt*dt;
+  }
+  for(let it=0;it<14;it++){
+    if(anchors[0]){pts[0].x=anchors[0].x;pts[0].y=anchors[0].y}
+    if(anchors[1]){pts[N-1].x=anchors[1].x;pts[N-1].y=anchors[1].y}
+    for(let i=0;i<N-1;i++){
+      const a=pts[i],b=pts[i+1];
+      let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||0.001;
+      const diff=(d-seg)/d;
+      // slime is stretchy: only partially enforce when over-stretched
+      const k=d>seg?0.5:0.5;
+      const pa=(i===0&&anchors[0])?0:1,pb=(i===N-2&&anchors[1])?0:1;
+      const s=pa+pb;if(!s)continue;
+      a.x+=dx*diff*k*pa/s*2;a.y+=dy*diff*k*pa/s*2;
+      b.x-=dx*diff*k*pb/s*2;b.y-=dy*diff*k*pb/s*2;
+    }
+  }
+  if(anchors[0]){pts[0].x=anchors[0].x;pts[0].y=anchors[0].y}
+  if(anchors[1]){pts[N-1].x=anchors[1].x;pts[N-1].y=anchors[1].y}
+}
+
+function ropeLength(){let s=0;for(let i=0;i<N-1;i++)s+=Math.hypot(pts[i+1].x-pts[i].x,pts[i+1].y-pts[i].y);return s}
+
+function rerollRope(R){
+  R.mult=0.5+Math.random()*1.1;R.ph=[];R.prof=[];
+  const f1=0.25+Math.random()*0.5,f2=0.7+Math.random()*0.9,f3=1.6+Math.random()*1.5,p1=Math.random()*6.28,p2=Math.random()*6.28,p3=Math.random()*6.28;
+  for(let i=0;i<N;i++){R.prof.push(0.95+0.5*Math.sin(i*f1+p1)+0.35*Math.sin(i*f2+p2)+0.22*Math.sin(i*f3+p3));R.ph.push(Math.random()*6.28)}
+  // random fat blobs and thin necks along the noodle
+  for(let k=0;k<2+Math.floor(Math.random()*3);k++){
+    const c=2+Math.floor(Math.random()*(N-4)),amp=(Math.random()<0.6?1:-0.6)*(0.5+Math.random()*0.9),wd=1.5+Math.random()*2.5;
+    for(let i=0;i<N;i++)R.prof[i]+=amp*Math.exp(-Math.pow((i-c)/wd,2));
+  }
+  R.prof=R.prof.map(v=>Math.max(0.28,Math.min(2.4,v)));
+}
+function drawSlime(time){
+  const rest=window.curL||Math.min(W,H)*0.75;
+  const stretch=Math.max(0.3,Math.min(1.3,rest/Math.max(ropeLength(),1)));
+  const base=Math.max(8,Math.min(W,H)*0.045)*stretch*(window.fw||1);
+  const R=window.curR||ropes[0];
+  const wd=[];for(let i=0;i<N;i++)wd.push(base*R.mult*R.prof[i]*(1+0.2*Math.sin(time*0.003+R.ph[i])));
+  const wob=i=>1+0.14*Math.sin(time*0.004+i*0.7);
+  const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+  ctx.lineCap='round';ctx.lineJoin='round';
+  // variable-width stroke along the noodle
+  const body=(wmul,col,ox,oy,every)=>{
+    ctx.strokeStyle=col;
+    for(let i=0;i<N;i++){
+      if(every&&i%every)continue;
+      const a=i>0?mid(pts[i-1],pts[i]):pts[0],b=i<N-1?mid(pts[i],pts[i+1]):pts[N-1],w=wd[i];
+      ctx.lineWidth=Math.max(0.8,w*wmul);
+      ctx.beginPath();ctx.moveTo(a.x+ox*w,a.y+oy*w);ctx.quadraticCurveTo(pts[i].x+ox*w,pts[i].y+oy*w,b.x+ox*w,b.y+oy*w);ctx.stroke();
+    }
+  };
+  body(1.3,'#020204',0,0);
+  body(1.05,'#07070c',0,0);
+  body(0.3,'rgba(90,105,170,.5)',-0.2,-0.25);
+  // side tendrils (grow and retract) + webbing between neighbours
+  const tl=[];
+  for(let i=2;i<N-2;i+=2){
+    const a=pts[i-1],b=pts[i+1];let dx=b.x-a.x,dy=b.y-a.y;const l=Math.hypot(dx,dy)||1;
+    const side=(i/2)%2?1:-1,nx=-dy/l*side,ny=dx/l*side;
+    const grow=Math.max(0,Math.sin(time*0.0016+i*1.37)),len=base*(0.6+3.4*grow)*(0.5+0.5*R.prof[i])*(0.7+0.5*R.mult);
+    tl.push({i,len,pts:tendrilPts(pts[i].x,pts[i].y,Math.atan2(ny,nx),len,time,i)});
+  }
+  for(const t of tl)drawTendril(t.pts,wd[t.i]*0.3);
+  // glossy black beads, sized by the local thickness
+  for(let i=1;i<N-1;i++){
+    const r=wd[i]*0.62*wob(i),p=pts[i];
+    const g=ctx.createRadialGradient(p.x-r*.35,p.y-r*.4,r*.05,p.x,p.y,r);
+    g.addColorStop(0,'#3a3e5c');g.addColorStop(.35,'#10111a');g.addColorStop(1,'#030306');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y,r,0,6.283);ctx.fill();
+    if(i%2){ctx.fillStyle='rgba(235,240,255,.8)';ctx.beginPath();ctx.ellipse(p.x-r*.3,p.y-r*.38,r*.22,r*.1,-0.6,0,6.283);ctx.fill()}
+  }
+  // specular streaks that follow the thickness
+  body(0.14,'rgba(225,232,255,.75)',-0.2,-0.28,3);
+  // creeping crown at the fingertips
+  for(const i of [0,N-1]){
+    const p=pts[i];if(i===0&&!anchors[0]||i===N-1&&!anchors[1])continue;
+    const ew=wd[i];
+    for(let k=0;k<9;k++){
+      const ang=k/9*6.283+time*0.0006*(i?1:-1),len=ew*(1.1+1.7*(0.5+0.5*Math.sin(time*0.004+k*2.1+i)));
+      drawTendril(tendrilPts(p.x,p.y,ang,len,time,k+i*7),ew*0.34);
+    }
+    const g=ctx.createRadialGradient(p.x-ew*.25,p.y-ew*.3,ew*.05,p.x,p.y,ew);
+    g.addColorStop(0,'#40456a');g.addColorStop(.4,'#0d0e16');g.addColorStop(1,'#020204');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y,ew*0.95,0,6.283);ctx.fill();
+    ctx.fillStyle='rgba(235,240,255,.85)';ctx.beginPath();ctx.ellipse(p.x-ew*.3,p.y-ew*.35,ew*.2,ew*.09,-0.6,0,6.283);ctx.fill();
+  }
+  if(window.dripOn!==false)drips(time,base*R.mult);
+}
+function tendrilPts(x,y,ang,len,time,seed){
+  const n=8,seg=len/n,out=[{x,y}];let a=ang,px=x,py=y;
+  for(let k=0;k<n;k++){
+    a+=Math.sin(time*0.006+seed*1.7+k*0.9)*0.3;
+    px+=Math.cos(a)*seg;py+=Math.sin(a)*seg;out.push({x:px,y:py});
+  }
+  return out;
+}
+function drawTendril(p,w){
+  const n=p.length-1;
+  for(let k=0;k<n;k++){
+    ctx.strokeStyle='#040408';ctx.lineWidth=Math.max(0.8,w*(1-k/n));
+    ctx.beginPath();ctx.moveTo(p[k].x,p[k].y);ctx.lineTo(p[k+1].x,p[k+1].y);ctx.stroke();
+  }
+  ctx.strokeStyle='rgba(150,165,230,.35)';ctx.lineWidth=Math.max(0.6,w*0.18);
+  ctx.beginPath();ctx.moveTo(p[0].x,p[0].y);for(let k=1;k<=n;k++)ctx.lineTo(p[k].x,p[k].y);ctx.stroke();
+}
+const dripState=[{ph:0},{ph:.5}];
+function drips(time,base){
+  let lo=0;for(let i=1;i<N;i++)if(pts[i].y>pts[lo].y)lo=i;
+  dripState.forEach((d,k)=>{
+    const idx=Math.max(1,Math.min(N-2,lo+(k?5:-5)));const p=pts[idx];
+    const ph=((time*0.0004+d.ph)%1),len=base*(0.6+ph*3.4),sway=Math.sin(time*0.004+k)*base*0.08;
+    // stringy strand + glossy bulb
+    ctx.strokeStyle='#040408';ctx.lineWidth=base*0.2*(1-ph*0.5);
+    ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.quadraticCurveTo(p.x+sway,p.y+len*0.5,p.x+sway*0.5,p.y+len);ctx.stroke();
+    const r=base*0.3*(1-ph*0.3),bx=p.x+sway*0.5,by=p.y+len;
+    const g=ctx.createRadialGradient(bx-r*.3,by-r*.3,r*.05,bx,by,r);g.addColorStop(0,'#4a4f78');g.addColorStop(.4,'#0d0e16');g.addColorStop(1,'#020204');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(bx,by,r,0,6.283);ctx.fill();
+    ctx.fillStyle='rgba(235,240,255,.8)';ctx.beginPath();ctx.arc(bx-r*.3,by-r*.35,r*.2,0,6.283);ctx.fill();
+  });
+}
+
+// video cover-fit helper
+function drawVideo(){
+  const vw=vid.videoWidth,vh=vid.videoHeight;if(!vw)return null;
+  const s=Math.max(W/vw,H/vh),dw=vw*s,dh=vh*s,ox=(W-dw)/2,oy=(H-dh)/2;
+  ctx.save();ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(vid,ox,oy,dw,dh);ctx.restore();
+  return {s,dw,dh,ox,oy};
+}
+let fit=null;
+
+function loop(now){
+  const dt=Math.min(0.033,(now-t0)/1000||0.016);t0=now;
+  if(mode==='cam'){fit=drawVideo()||fit}else{ctx.fillStyle='#08080d';ctx.fillRect(0,0,W,H);grid()}
+  // smooth anchors toward targets
+  for(const R of ropes)for(let k=0;k<2;k++){
+    const tg=R.t[k],smooth=R.s,anchors=R.a;
+    if(tg){smooth[k]=smooth[k]?{x:smooth[k].x+(tg.x-smooth[k].x)*0.55,y:smooth[k].y+(tg.y-smooth[k].y)*0.55}:{x:tg.x,y:tg.y};anchors[k]=smooth[k]}
+    else{anchors[k]=null;smooth[k]=null}
+  }
+  if(mode!=='none'){
+    if(window.hudLock){hud.textContent=window.hudLock}
+    else if(!anchors[0]&&!anchors[1]&&mode==='cam'){hud.textContent='Show your hands 🖐️🖐️'}
+    else if(mode==='cam'&&(!anchors[0]||!anchors[1])){hud.textContent='Show both hands to attach the goo'}
+    else hud.textContent=mode==='cam'?(window.wallMode?'The goo sticks to the walls. Tap to add sticky spots':'Pull your hands apart to stretch it'):'Drag the two handles';
+    // substeps for stability
+    ropes.forEach((R,ri)=>{if(!R.a[0]&&!R.a[1]){R.live=false;return}if(!R.live){rerollRope(R);R.live=true}window.curR=R;pts=R.pts;anchors=R.a;R.w=!!window.wallMode;window.curL=R.w&&R.a[0]&&R.a[1]?Math.max(Math.min(W,H)*0.5,Math.hypot(R.a[0].x-R.a[1].x,R.a[0].y-R.a[1].y)*1.08):0;window.dripOn=!window.multi||ri%5===2;step(dt/2);step(dt/2);drawSlime(now);if(R.w&&R.a[1])splat(R.a[1])});anchors=ropes[0].a;
+    
+    if(window.wallMode)for(const w of walls){ctx.strokeStyle='#7dff3a';ctx.lineWidth=3;ctx.beginPath();ctx.arc(w.x,w.y,14,0,6.283);ctx.stroke()}
+    if(mode==='demo'){for(const t of targets){if(!t)continue;ctx.strokeStyle='#ffffff88';ctx.lineWidth=2;ctx.beginPath();ctx.arc(t.x,t.y,26,0,6.283);ctx.stroke()}}
+  }
+  requestAnimationFrame(loop);
+}
+function grid(){ctx.strokeStyle='#ffffff10';ctx.lineWidth=1;for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}}
+
+const targets=ropes[0].t;
+
+// ---- Demo / touch mode ----
+function startDemo(){
+  mode='demo';ui.style.display='none';
+  targets[0]={x:W*0.25,y:H*0.45};targets[1]={x:W*0.75,y:H*0.45};
+  const drag={};
+  cv.addEventListener('pointerdown',e=>{
+    let best=0,bd=1e9;targets.forEach((t,i)=>{const d=Math.hypot(t.x-e.clientX,t.y-e.clientY);if(d<bd){bd=d;best=i}});
+    drag[e.pointerId]=best;cv.setPointerCapture(e.pointerId);targets[best]={x:e.clientX,y:e.clientY};
+  });
+  cv.addEventListener('pointermove',e=>{const k=drag[e.pointerId];if(k!==undefined)targets[k]={x:e.clientX,y:e.clientY}});
+  const up=e=>{delete drag[e.pointerId]};cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+}
+
+// ---- Camera + hand tracking ----
+const BASE='https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/';
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('script'));document.head.appendChild(s)})}
+
+async function startCam(){
+  const btn=document.getElementById('go');btn.textContent='Starting…';btn.disabled=true;
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:960},height:{ideal:720}},audio:false});
+    vid.srcObject=stream;await vid.play();
+    mode='cam';ui.style.display='none';hud.textContent='Loading hand tracker…';
+    let hands=null;
+    try{
+    await withTimeout(loadScript(BASE+'hands.js'),6000);
+    hands=new Hands({locateFile:f=>BASE+f});
+    hands.setOptions({maxNumHands:2,modelComplexity:1,minDetectionConfidence:0.6,minTrackingConfidence:0.5});
+    hands.onResults(r=>{
+      targets[0]=targets[1]=null;
+      if(!fit||!r.multiHandLandmarks)return;
+      // map hands to left/right of screen so ends stay consistent
+      const hs=r.multiHandLandmarks.map(l=>l.map(p=>({x:W-(p.x*fit.dw+fit.ox),y:p.y*fit.dh+fit.oy}))).sort((a,b)=>a[0].x-b[0].x);for(const q of ropes){q.t[0]=q.t[1]=null}const TIPS=[4,8,12,16,20];if(hs.length===1){const side=hs[0][0].x<W/2?0:1;ropes.forEach((q,f)=>{q.t[side]=hs[0][TIPS[f]]})}else if(hs.length>1){ropes.forEach((q,f)=>{q.t[0]=hs[0][TIPS[f]];q.t[1]=hs[1][TIPS[f]]})}if(window.wallMode)wallAssign(hs.map(h=>[4,8,12,16,20].map((ti,f)=>({tip:h[ti],base:h[[2,5,9,13,17][f]]}))));return;const tips=[];
+      // landmark x is in un-mirrored video space; mirrored display: x' = W-(ox+x*dw)
+      tips.sort((a,b)=>a.x-b.x);
+      if(tips.length===1){const k=tips[0].x<W/2?0:1;targets[k]=tips[0]}
+      else if(tips.length>=2){targets[0]=tips[0];targets[1]=tips[1]}
+    });
+    await withTimeout(hands.initialize(),12000);
+    }catch(e){hands=null}
+    if(!hands){tag('Backup tracker (hand model failed to load)');ensureControls();window.fw=0.5;window.multi=true;startSkin();return}
+    tag('Full hand tracking');ensureControls();
+    window.fw=0.5;window.multi=true;
+    window.hudLock=null;
+    let busy=false;
+    const pump=async()=>{
+      if(!busy&&vid.readyState>=2){busy=true;try{await hands.send({image:vid})}catch(e){}busy=false}
+      requestAnimationFrame(pump);
+    };
+    pump();
+  }catch(err){
+    mode='none';ui.style.display='flex';btn.disabled=false;btn.textContent='Retry camera';
+    ui.querySelector('p').textContent=(!navigator.mediaDevices?'This page isn\u2019t allowed to use the camera API here.':(err&&err.name==='NotAllowedError')?'Camera access was blocked. Either you tapped Block, or this embedded page isn\u2019t permitted to ask for the camera.':'Camera error ('+((err&&err.name)||'unknown')+').')+' If it keeps happening, run the downloaded file from your own HTTPS site or localhost, or play with touch.';
+    if(vid.srcObject){vid.srcObject.getTracks().forEach(t=>t.stop())}
+  }
+}
+function tag(t){let e=document.getElementById('tag');if(!e){e=document.createElement('div');e.id='tag';e.style.cssText='position:absolute;top:calc(8px + env(safe-area-inset-top,0px));left:10px;font-size:12px;background:#0008;color:#fff;padding:4px 8px;border-radius:8px;z-index:4';document.body.appendChild(e)}e.textContent=t}
+const walls=[];
+function ray(tip,base,side){
+  let dx=tip.x-base.x,dy=tip.y-base.y;const l=Math.hypot(dx,dy)||1;dx/=l;dy/=l;
+  dx+=side?0.9:-0.9;const m=Math.hypot(dx,dy);dx/=m;dy/=m;
+  let t=1e9;
+  if(dx>0)t=Math.min(t,(W-4-tip.x)/dx);else if(dx<0)t=Math.min(t,(4-tip.x)/dx);
+  if(dy>0)t=Math.min(t,(H-4-tip.y)/dy);else if(dy<0)t=Math.min(t,(4-tip.y)/dy);
+  t=Math.max(t,40);
+  return{x:tip.x+dx*t,y:tip.y+dy*t};
+}
+function wallAssign(list){
+  for(const q of ropes){q.t[0]=q.t[1]=null}
+  list.slice(0,2).forEach((h,hi)=>{
+    const side=list.length===1?(h[0].tip.x<W/2?0:1):hi;
+    h.slice(0,5).forEach((o,f)=>{
+      const q=ropes[hi*5+f];
+      const w=walls.length?walls.reduce((b,p)=>Math.hypot(p.x-o.tip.x,p.y-o.tip.y)<Math.hypot(b.x-o.tip.x,b.y-o.tip.y)?p:b):ray(o.tip,o.base,side);
+      q.t[0]=o.tip;q.t[1]=w;
+    });
+  });
+}
+function splat(p){
+  const b=Math.max(8,Math.min(W,H)*0.045)*(window.fw||1),t=performance.now();
+  // spiky black splat
+  ctx.save();ctx.translate(p.x,p.y);
+  ctx.fillStyle='#030307';ctx.beginPath();
+  const n=14;
+  for(let i=0;i<n*2;i++){
+    const a=i/(n*2)*6.283,r=(i%2?b*1.5:b*(2.5+0.7*Math.sin(t*0.005+i)));
+    i?ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r*0.8):ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r*0.8);
+  }
+  ctx.closePath();ctx.fill();
+  const g=ctx.createRadialGradient(-b*.4,-b*.4,2,0,0,b*1.6);g.addColorStop(0,'#3e4366');g.addColorStop(.4,'#0c0d15');g.addColorStop(1,'#020204');
+  ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(0,0,b*1.5,b*1.2,0.3,0,6.283);ctx.fill();
+  ctx.fillStyle='rgba(235,240,255,.8)';ctx.beginPath();ctx.ellipse(-b*.5,-b*.45,b*.35,b*.14,-0.6,0,6.283);ctx.fill();
+  ctx.restore();
+}
+function ensureControls(){
+  if(document.getElementById('ctl'))return;
+  const d=document.createElement('div');d.id='ctl';
+  d.style.cssText='position:absolute;top:calc(8px + env(safe-area-inset-top,0px));right:10px;display:flex;gap:6px;z-index:4';
+  const mk=(t,fn)=>{const b=document.createElement('button');b.textContent=t;b.style.cssText='padding:8px 12px;font-size:13px';b.onclick=()=>fn(b);d.appendChild(b)};
+  mk('🧱 Walls: off',b=>{window.wallMode=!window.wallMode;b.textContent='🧱 Walls: '+(window.wallMode?'on':'off')});
+  mk('Clear',()=>{walls.length=0});
+  document.body.appendChild(d);
+  cv.addEventListener('pointerdown',e=>{if(window.wallMode){walls.push({x:e.clientX,y:e.clientY});if(walls.length>5)walls.shift()}});
+}
+function withTimeout(p,ms){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))])}
+
+// ---- Built-in skin-color hand tracker (used when the MediaPipe model can't load) ----
+function startSkin(){
+  const sw=128,sh=96,sc=document.createElement('canvas');sc.width=sw;sc.height=sh;
+  const sx=sc.getContext('2d',{willReadFrequently:true});
+  const lab=new Uint8Array(sw*sh),stack=new Int32Array(sw*sh);
+  let cal=null;
+  const cbOf=(R,G,B)=>128-.1687*R-.3313*G+.5*B,crOf=(R,G,B)=>128+.5*R-.4187*G-.0813*B;
+  function blobs(){
+    sx.drawImage(vid,0,0,sw,sh);const d=sx.getImageData(0,0,sw,sh).data;
+    const m=new Uint8Array(sw*sh),r=cal||{cb0:77,cb1:127,cr0:133,cr1:173};
+    for(let i=0;i<sw*sh;i++){
+      const R=d[i*4],G=d[i*4+1],B=d[i*4+2],cb=cbOf(R,G,B),cr=crOf(R,G,B),y=.299*R+.587*G+.114*B;
+      if(y>50&&cb>=r.cb0&&cb<=r.cb1&&cr>=r.cr0&&cr<=r.cr1){
+        const px=i%sw,py=(i/sw)|0;
+        if(cal&&px>=cal.x0&&px<=cal.x1&&py>=cal.y0&&py<=cal.y1)continue;
+        m[i]=1;
+      }
+    }
+    lab.fill(0);const out=[];
+    for(let s=0;s<sw*sh;s++){
+      if(!m[s]||lab[s])continue;
+      let sp=0;stack[sp++]=s;lab[s]=1;
+      const b={pl:[],area:0,x0:sw,x1:0,y0:sh,y1:0,rc:new Int16Array(sh),rx:new Int32Array(sh),scb:0,scr:0};
+      while(sp){
+        const p=stack[--sp],px=p%sw,py=(p/sw)|0;
+        b.area++;b.pl.push(p);b.rc[py]++;b.rx[py]+=px;
+        if(px<b.x0)b.x0=px;if(px>b.x1)b.x1=px;if(py<b.y0)b.y0=py;if(py>b.y1)b.y1=py;
+        b.scb+=cbOf(d[p*4],d[p*4+1],d[p*4+2]);b.scr+=crOf(d[p*4],d[p*4+1],d[p*4+2]);
+        if(px>0&&m[p-1]&&!lab[p-1]){lab[p-1]=1;stack[sp++]=p-1}
+        if(px<sw-1&&m[p+1]&&!lab[p+1]){lab[p+1]=1;stack[sp++]=p+1}
+        if(py>0&&m[p-sw]&&!lab[p-sw]){lab[p-sw]=1;stack[sp++]=p-sw}
+        if(py<sh-1&&m[p+sw]&&!lab[p+sw]){lab[p+sw]=1;stack[sp++]=p+sw}
+      }
+      out.push(b);
+    }
+    return out;
+  }
+  const tip=b=>{for(let y=b.y0;y<=b.y1;y++)if(b.rc[y]>=2)return{x:b.rx[y]/b.rc[y],y};return{x:(b.x0+b.x1)/2,y:b.y0}};
+  const minA=sw*sh*0.012;
+  function fingers(b){
+    let cx=0,cy=0;for(const p of b.pl){cx+=p%sw;cy+=(p/sw)|0}cx/=b.area;cy/=b.area;
+    const NB=48,rad=new Float32Array(NB),pos=new Array(NB),lim=cy+(b.y1-b.y0)*0.25;
+    for(const p of b.pl){const x=p%sw,y=(p/sw)|0,dx=x-cx,dy=y-cy,k=Math.min(NB-1,((Math.atan2(dy,dx)+Math.PI)/6.2832*NB)|0),r=Math.hypot(dx,dy);if(r>rad[k]){rad[k]=r;pos[k]={x,y}}}
+    let mx=0;for(let k=0;k<NB;k++)if(pos[k]&&pos[k].y<=lim&&rad[k]>mx)mx=rad[k];
+    const pk=[];
+    for(let k=0;k<NB;k++){
+      if(!pos[k]||pos[k].y>lim||rad[k]<mx*0.55)continue;
+      let ok=true;for(let j=-2;j<=2;j++){if(j&&rad[(k+j+NB)%NB]>rad[k]){ok=false;break}}
+      if(ok)pk.push({p:pos[k],r:rad[k]});
+    }
+    pk.sort((a,b)=>b.r-a.r);
+    const out=pk.slice(0,5).map(o=>o.p);
+    return out.length?out:[tip(b)];
+  }
+  function skinAssign(bs){
+    const toScr=t=>({x:W-(t.x/sw*fit.dw+fit.ox),y:t.y/sh*fit.dh+fit.oy});
+    const hs=bs.map(b=>fingers(b).map(toScr).sort((a,b)=>a.x-b.x)).sort((a,b)=>a[0].x-b[0].x);
+    const A=hs[0],B=hs[1];window.lastHs=hs;
+    if(!B){const side=A[0].x<W/2?0:1;A.forEach((p,i)=>{if(i<5)ropes[i].t[side]=p})}
+    else{const Bd=B.slice().reverse(),n=Math.min(A.length,Bd.length,5);for(let i=0;i<n;i++){ropes[i].t[0]=A[i];ropes[i].t[1]=Bd[i]}}
+  }
+  window.hudLock='Step 1: face in view, hands down, then tap Ready';
+  const btn=document.createElement('button');btn.textContent='Ready';
+  btn.style.cssText='position:absolute;left:50%;transform:translateX(-50%);bottom:calc(56px + env(safe-area-inset-bottom,0px));z-index:5';
+  document.body.appendChild(btn);
+  btn.onclick=()=>{
+    const bs=blobs().sort((a,b)=>b.area-a.area);
+    if(!bs.length||bs[0].area<minA){window.hudLock='Can\'t see your face. Try better light, then tap Ready';return}
+    const b=bs[0],mcb=b.scb/b.area,mcr=b.scr/b.area,pad=(b.x1-b.x0)*0.2;
+    cal={cb0:mcb-15,cb1:mcb+15,cr0:mcr-15,cr1:mcr+15,x0:b.x0-pad,x1:b.x1+pad,y0:b.y0-pad,y1:Math.min(sh-1,b.y1+(b.y1-b.y0)*0.7)};
+    btn.remove();window.hudLock=null;
+  };
+  (function tick(){
+    if(vid.readyState>=2&&fit){
+      const bs=blobs().filter(b=>b.area>=minA).sort((a,b)=>b.area-a.area).slice(0,2);
+      const tips=bs.map(b=>{const t=tip(b);return{x:W-(t.x/sw*fit.dw+fit.ox),y:t.y/sh*fit.dh+fit.oy}}).sort((a,b)=>a.x-b.x);
+      targets[0]=targets[1]=null;
+      for(const q of ropes){q.t[0]=q.t[1]=null}
+      if(cal&&bs.length){skinAssign(bs);if(window.wallMode)wallAssign(window.lastHs.map(h=>h.map(p=>({tip:p,base:{x:p.x,y:p.y+50}}))))}
+      if(false){
+        if(tips.length===1)targets[tips[0].x<W/2?0:1]=tips[0];
+        else if(tips.length>1){targets[0]=tips[0];targets[1]=tips[1]}
+      }
+    }
+    requestAnimationFrame(tick);
+  })();
+}
+
+document.getElementById('go').onclick=startCam;
+document.getElementById('demo').onclick=startDemo;
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
